@@ -51,7 +51,7 @@
         <aside class="panel status-panel">
           <div class="panel-header">
             <div>
-              <p class="eyebrow">ESP32</p>
+              <p class="eyebrow">MQTT</p>
               <h2>Status</h2>
             </div>
             <button class="icon-button" type="button" id="refreshButton" title="Refresh status" aria-label="Refresh status">
@@ -69,7 +69,7 @@
               <dd id="statusWifi">-</dd>
             </div>
             <div>
-              <dt>IP</dt>
+              <dt>Topic</dt>
               <dd id="statusIp">-</dd>
             </div>
           </dl>
@@ -79,29 +79,29 @@
           <div class="panel-header">
             <div>
               <p class="eyebrow">Settings</p>
-              <h2>ESP32 Address</h2>
+              <h2>MQTT Topic</h2>
             </div>
           </div>
 
           <form id="settingsForm" class="settings-form">
-            <label for="espIp">ESP32 IP Address</label>
+            <label for="mqttTopic">Device Topic</label>
             <div class="input-row">
               <input
                 type="text"
-                id="espIp"
-                name="espIp"
-                inputmode="numeric"
-                placeholder="192.168.1.100"
+                id="mqttTopic"
+                name="mqttTopic"
+                placeholder="mitschess/mitesptest/servo"
                 autocomplete="off"
               >
               <button type="submit">Save</button>
             </div>
-            <p class="hint" id="settingsHint">Alamat disimpan di browser ini.</p>
+            <p class="hint" id="settingsHint">Topic harus sama dengan kode ESP32.</p>
           </form>
         </article>
       </section>
     </main>
 
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <script src="script.js"></script>
   </body>
 </html>

@@ -1,5 +1,6 @@
-const DEFAULT_IP = "192.168.1.100";
-const STORAGE_KEY = "esp32";
+const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
+const DEFAULT_TOPIC = "mitschess/mitesptest/servo";
+const STORAGE_KEY_TOPIC = "mqttTopic";
 
 const slider = document.getElementById("servoSlider");
 const angleReadout = document.getElementById("angleReadout");
@@ -9,26 +10,33 @@ const statusAngle = document.getElementById("statusAngle");
 const statusWifi = document.getElementById("statusWifi");
 const statusIp = document.getElementById("statusIp");
 const settingsForm = document.getElementById("settingsForm");
-const espIpInput = document.getElementById("espIp");
+const mqttTopicInput = document.getElementById("mqttTopic");
 const settingsHint = document.getElementById("settingsHint");
 const refreshButton = document.getElementById("refreshButton");
 
-let requestTimer;
+let mqttClient;
+let publishTimer;
+let currentTopic = getTopic();
 
-function isHttpsHostedPage() {
-  return window.location.protocol === "https:";
+function getTopic() {
+  return localStorage.getItem(STORAGE_KEY_TOPIC) || DEFAULT_TOPIC;
 }
 
-function getHttpsBlockMessage() {
-  return "Vercel memakai HTTPS, sedangkan ESP32 memakai HTTP lokal. Browser memblokir koneksi ini.";
+function getClientId(prefix) {
+  const randomPart = Math.random().toString(16).slice(2);
+  return `${prefix}-${randomPart}`;
 }
 
-function getEspIp() {
-  return localStorage.getItem(STORAGE_KEY) || DEFAULT_IP;
+function getAngleTopic() {
+  return `${currentTopic}/angle`;
 }
 
-function getBaseUrl() {
-  return `http://${getEspIp()}`;
+function getStatusTopic() {
+  return `${currentTopic}/status`;
+}
+
+function getCommandTopic() {
+  return `${currentTopic}/command`;
 }
 
 function setConnectionState(isOnline, label) {
@@ -43,105 +51,114 @@ function setAngle(value) {
   angleReadout.textContent = `${angle}\u00b0`;
 }
 
-async function postServoAngle(angle) {
-  if (isHttpsHostedPage()) {
-    throw new Error("HTTPS_PAGE_TO_HTTP_ESP32");
+function publish(topic, payload) {
+  if (!mqttClient || !mqttClient.connected) {
+    setConnectionState(false, "Offline");
+    settingsHint.textContent = "MQTT belum terhubung.";
+    return;
   }
 
-  const response = await fetch(`${getBaseUrl()}/servo`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ angle })
-  });
-
-  if (!response.ok) {
-    throw new Error(`ESP32 returned ${response.status}`);
-  }
+  mqttClient.publish(topic, payload, { qos: 0, retain: false });
 }
 
-async function sendAngleDebounced(angle) {
-  window.clearTimeout(requestTimer);
-  requestTimer = window.setTimeout(async () => {
-    try {
-      await postServoAngle(angle);
-      setConnectionState(true, "Online");
-      statusAngle.textContent = `${angle}\u00b0`;
-    } catch (error) {
-      setConnectionState(false, "Offline");
-      settingsHint.textContent = isHttpsHostedPage()
-        ? getHttpsBlockMessage()
-        : `Tidak bisa mengirim ke ${getEspIp()}.`;
-    }
-  }, 120);
+function publishAngleDebounced(angle) {
+  window.clearTimeout(publishTimer);
+  publishTimer = window.setTimeout(() => {
+    publish(getAngleTopic(), String(angle));
+    statusAngle.textContent = `${angle}\u00b0`;
+    settingsHint.textContent = `Angle dikirim ke ${getAngleTopic()}.`;
+  }, 80);
 }
 
-async function refreshStatus() {
+function handleStatusMessage(payload) {
   try {
-    if (isHttpsHostedPage()) {
-      throw new Error("HTTPS_PAGE_TO_HTTP_ESP32");
-    }
-
-    const response = await fetch(`${getBaseUrl()}/status`, {
-      method: "GET",
-      cache: "no-store"
-    });
-
-    if (!response.ok) {
-      throw new Error(`ESP32 returned ${response.status}`);
-    }
-
-    const data = await response.json();
+    const data = JSON.parse(payload);
     const angle = Number(data.angle ?? slider.value);
 
     setAngle(angle);
     statusAngle.textContent = `${angle}\u00b0`;
     statusWifi.textContent = data.wifi || "-";
-    statusIp.textContent = data.ip || getEspIp();
-    setConnectionState(true, "Online");
-    settingsHint.textContent = `Terhubung ke ${getEspIp()}.`;
+    statusIp.textContent = currentTopic;
+    settingsHint.textContent = "Status ESP32 diterima dari MQTT.";
   } catch (error) {
-    statusWifi.textContent = "-";
-    statusIp.textContent = getEspIp();
-    setConnectionState(false, "Offline");
-    settingsHint.textContent = isHttpsHostedPage()
-      ? getHttpsBlockMessage()
-      : `Pastikan ESP32 aktif di ${getEspIp()}.`;
+    settingsHint.textContent = "Status MQTT tidak bisa dibaca.";
   }
+}
+
+function connectMqtt() {
+  if (mqttClient) {
+    mqttClient.end(true);
+  }
+
+  setConnectionState(false, "Connecting...");
+  statusIp.textContent = currentTopic;
+
+  mqttClient = mqtt.connect(MQTT_BROKER_URL, {
+    clientId: getClientId("servo-web"),
+    clean: true,
+    connectTimeout: 5000,
+    reconnectPeriod: 2500
+  });
+
+  mqttClient.on("connect", () => {
+    setConnectionState(true, "MQTT Online");
+    settingsHint.textContent = `Terhubung ke topic ${currentTopic}.`;
+    mqttClient.subscribe(getStatusTopic());
+    publish(getCommandTopic(), "status");
+  });
+
+  mqttClient.on("message", (topic, message) => {
+    if (topic === getStatusTopic()) {
+      handleStatusMessage(message.toString());
+    }
+  });
+
+  mqttClient.on("reconnect", () => {
+    setConnectionState(false, "Reconnecting...");
+  });
+
+  mqttClient.on("close", () => {
+    setConnectionState(false, "Offline");
+  });
+
+  mqttClient.on("error", () => {
+    setConnectionState(false, "Offline");
+    settingsHint.textContent = "Tidak bisa terhubung ke MQTT broker.";
+  });
 }
 
 slider.addEventListener("input", () => {
   const angle = Number(slider.value);
   setAngle(angle);
-  sendAngleDebounced(angle);
+  publishAngleDebounced(angle);
 });
 
 document.querySelectorAll("[data-angle]").forEach((button) => {
   button.addEventListener("click", () => {
     const angle = Number(button.dataset.angle);
     setAngle(angle);
-    sendAngleDebounced(angle);
+    publishAngleDebounced(angle);
   });
 });
 
 settingsForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  const nextIp = espIpInput.value.trim();
+  const nextTopic = mqttTopicInput.value.trim().replace(/^\/+|\/+$/g, "");
 
-  if (!nextIp) {
-    settingsHint.textContent = "Masukkan alamat IP ESP32.";
+  if (!nextTopic) {
+    settingsHint.textContent = "Masukkan MQTT topic.";
     return;
   }
 
-  localStorage.setItem(STORAGE_KEY, nextIp);
-  settingsHint.textContent = `Alamat ${nextIp} disimpan.`;
-  refreshStatus();
+  currentTopic = nextTopic;
+  localStorage.setItem(STORAGE_KEY_TOPIC, currentTopic);
+  connectMqtt();
 });
 
-refreshButton.addEventListener("click", refreshStatus);
+refreshButton.addEventListener("click", () => {
+  publish(getCommandTopic(), "status");
+});
 
-espIpInput.value = getEspIp();
+mqttTopicInput.value = currentTopic;
 setAngle(90);
-refreshStatus();
-window.setInterval(refreshStatus, 5000);
+connectMqtt();
